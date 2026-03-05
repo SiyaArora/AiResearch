@@ -4,11 +4,16 @@ Tuition Remission Email Generator
 Extracts data from Oracle database and generates branded HTML emails
 """
 
-import cx_Oracle
-import os
+import html as html_lib
+import re
+
+try:
+    import cx_Oracle
+except ModuleNotFoundError:  # pragma: no cover - environment dependent
+    cx_Oracle = None
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Any
 import logging
 
 # Configure logging
@@ -25,6 +30,7 @@ class TuitionEmailGenerator:
     # Brand colors
     USF_GREEN = "#00543C"
     USF_GOLD = "#FDBB30"
+    TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
     def __init__(self, db_config: Dict[str, str]):
         """
@@ -44,6 +50,10 @@ class TuitionEmailGenerator:
         Returns:
             bool: True if connection successful, False otherwise
         """
+        if cx_Oracle is None:
+            logger.error("cx_Oracle is not installed. Install it to enable database connectivity.")
+            return False
+
         try:
             dsn = cx_Oracle.makedsn(
                 self.db_config['host'],
@@ -61,7 +71,7 @@ class TuitionEmailGenerator:
             logger.info("Successfully connected to Oracle database")
             return True
 
-        except cx_Oracle.Error as error:
+        except Exception as error:
             logger.error(f"Error connecting to Oracle database: {error}")
             return False
 
@@ -79,6 +89,11 @@ class TuitionEmailGenerator:
             logger.error("No database connection established")
             return []
 
+        if not self.TABLE_NAME_PATTERN.fullmatch(table_name):
+            logger.error("Invalid table name provided: %s", table_name)
+            return []
+
+        cursor = None
         try:
             cursor = self.connection.cursor()
 
@@ -120,13 +135,25 @@ class TuitionEmailGenerator:
                 results.append(dict(zip(columns, row)))
 
             logger.info(f"Fetched {len(results)} records from {table_name}")
-            cursor.close()
 
             return results
 
-        except cx_Oracle.Error as error:
+        except Exception as error:
             logger.error(f"Error fetching data: {error}")
             return []
+        finally:
+            if cursor is not None:
+                cursor.close()
+
+    def parse_numeric(self, value: Any) -> float:
+        """Safely parse numeric values that may include commas or be missing."""
+        if value in (None, ""):
+            return 0.0
+
+        try:
+            return float(str(value).replace(',', ''))
+        except (TypeError, ValueError):
+            return 0.0
 
     def format_currency(self, amount: float) -> str:
         """Format number as currency string"""
@@ -151,24 +178,24 @@ class TuitionEmailGenerator:
             HTML string for the email
         """
         # Extract and format data
-        employee_name = data.get('employee_name', 'Employee')
-        student_name = data.get('student_name', '')
-        relation = data.get('relation_to_employee', '')
-        major = data.get('major', '')
-        degree = data.get('degree', '')
-        college = data.get('college', '')
+        employee_name = html_lib.escape(str(data.get('employee_name', 'Employee')))
+        student_name = html_lib.escape(str(data.get('student_name', '')))
+        relation = html_lib.escape(str(data.get('relation_to_employee', '')))
+        major = html_lib.escape(str(data.get('major', '')))
+        degree = html_lib.escape(str(data.get('degree', '')))
+        college = html_lib.escape(str(data.get('college', '')))
 
         # Financial data
-        intersession = float(data.get('intersession', 0) or 0)
-        spring = float(data.get('spring', 0) or 0)
-        summer = float(data.get('summer', 0) or 0)
-        fall = float(data.get('fall', 0) or 0)
-        total_benefit = float(data.get('total_benefit', 0) or 0)
-        exemption = float(data.get('less_qualified_exemption', 0) or 0)
-        ytd_taxed = float(data.get('ytd_taxed_amount', 0) or 0)
-        taxable_balance = float(data.get('taxable_benefit_balance', 0) or 0)
-        per_pay_period = float(data.get('taxable_benefit_per_pay_period', 0) or 0)
-        net_reduction = float(data.get('estimated_net_reduction_per_pay', 0) or 0)
+        intersession = self.parse_numeric(data.get('intersession', 0))
+        spring = self.parse_numeric(data.get('spring', 0))
+        summer = self.parse_numeric(data.get('summer', 0))
+        fall = self.parse_numeric(data.get('fall', 0))
+        total_benefit = self.parse_numeric(data.get('total_benefit', 0))
+        exemption = self.parse_numeric(data.get('less_qualified_exemption', 0))
+        ytd_taxed = self.parse_numeric(data.get('ytd_taxed_amount', 0))
+        taxable_balance = self.parse_numeric(data.get('taxable_benefit_balance', 0))
+        per_pay_period = self.parse_numeric(data.get('taxable_benefit_per_pay_period', 0))
+        net_reduction = self.parse_numeric(data.get('estimated_net_reduction_per_pay', 0))
 
         # Dates
         letter_date = self.format_date(data.get('letter_date', datetime.now()))
